@@ -1,4 +1,6 @@
-# Integrating New Relic with NestJS: A Guide
+# Backend Monitoring: Because console.log Isn't a Monitoring Strategy
+
+## Integrating New Relic with NestJS
 
 **Objective**: This document offers a step-by-step guide on integrating your NestJS applications with New Relic for enhanced monitoring and error reporting.
 

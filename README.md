@@ -6,9 +6,9 @@ Welcome, developers! This README guides you through integrating New Relic into y
 
 This repository contains separate guides for integrating New Relic with your frontend and backend:
 
-- **Frontend Integration:** Find the detailed guide for integrating New Relic into your frontend application [in the Frontend Integration guide](Frontend.md). (Spoiler alert: it involves less server-side wrestling! 😉)
+- **Frontend Integration:** Find the detailed guide for integrating New Relic into your frontend application [in the Frontend Integration guide](frontend.md). (Spoiler alert: it involves less server-side wrestling! 😉)
 
-- **Backend Integration (NestJS):** For backend integration (specifically with NestJS), consult the comprehensive guide located [in the Backend Integration guide](Backend.md). (Prepare for some serious Node.js magic! ✨)
+- **Backend Integration (NestJS):** For backend integration (specifically with NestJS), consult the comprehensive guide located [in the Backend Integration guide](backend.md). (Prepare for some serious Node.js magic! ✨)
 
 **Why Bother with New Relic?** 🤔
 

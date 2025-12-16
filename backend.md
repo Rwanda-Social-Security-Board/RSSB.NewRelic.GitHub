@@ -158,58 +158,86 @@ export class LoggerService {
 
 ## 5. NestJS Exception Filter
 
-Here is an example of an exception filter that uses the custom `LoggerService` and logs exceptions to New Relic:
+Here is an example of an exception filter that uses NestJS's built-in `Logger` and logs exceptions to New Relic:
 
 ```typescript
 import {
-  ExceptionFilter,
-  Catch,
   ArgumentsHost,
+  Catch,
+  ExceptionFilter,
   HttpException,
+  HttpStatus,
+  Logger,
 } from "@nestjs/common";
-import { LoggerService } from "./logger.service";
-import { Response, Request } from "express";
+import { Request, Response } from "express";
 
-const newrelic = require("newrelic");
+const newRelic = require("newrelic");
 
+/**
+ * Custom global exception filter that catches every thrown error.
+ */
 @Catch()
-export class AppExceptionFilter<T> implements ExceptionFilter {
-  constructor(private readonly logger: LoggerService) {}
+export class AppExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AppExceptionFilter.name);
 
-  async catch(exception: any, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const request = ctx.getRequest<Request>();
-    const response = ctx.getResponse<Response>();
+  catch(exception: unknown, host: ArgumentsHost): Response {
+    const context = host.switchToHttp();
+    const request = context.getRequest<Request>();
+    const response = context.getResponse<Response>();
+    const message =
+      exception instanceof HttpException
+        ? exception.getResponse()
+        : "Internal server error";
 
-    const isHttpException = exception instanceof HttpException;
-    const status = isHttpException ? exception.getStatus() : 500;
-    const message = isHttpException
-      ? exception.getResponse()
-      : "Internal server error";
-
-    this.logger.error(message, exception.stack);
+    this.logger.error(
+      message,
+      exception instanceof Error ? exception.stack : undefined
+    );
 
     // Log the error to New Relic with request/response context
-    newrelic.noticeError(
+    newRelic.noticeError(
       exception,
       {
         request,
         response,
       },
-      false,
+      false
     );
 
-    // Record a log event in New Relic
-    newrelic.recordLogEvent({
-      message: isHttpException ? exception.getResponse() : message,
-      level: "ERROR",
-      error: exception,
-    });
+    console.log(`❌ URL: ${request.url} ===> `, exception);
 
-    response.status(status).json({
-      statusCode: status,
-      message: message,
-    });
+    if (exception instanceof HttpException) {
+      const responseMsg = exception.getResponse();
+
+      if (responseMsg["message"] && Array.isArray(responseMsg["message"])) {
+        responseMsg["message"] = responseMsg["message"][0];
+      }
+
+      if (responseMsg["error"]) {
+        responseMsg["code"] = responseMsg["error"]
+          .split(" ")
+          ?.join("_")
+          ?.toUpperCase();
+        delete responseMsg["error"];
+      }
+      delete responseMsg["statusCode"];
+
+      // Record a log event in New Relic
+      newRelic.recordLogEvent({
+        message: exception.getResponse(),
+        level: "ERROR",
+        error: exception,
+        statusCode: exception.getStatus() || HttpStatus.INTERNAL_SERVER_ERROR,
+        timestamp: new Date().toISOString(),
+        path: request?.url,
+      });
+
+      return response.status(exception.getStatus()).json(responseMsg);
+    }
+
+    return response
+      .status(HttpStatus.INTERNAL_SERVER_ERROR)
+      .json({ message: "Internal server error" });
   }
 }
 ```
@@ -226,12 +254,10 @@ import 'newrelic';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AppExceptionFilter } from './app-exception.filter';
-import { LoggerService } from './logger.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const logger = app.get(LoggerService);
-  app.useGlobalFilters(new AppExceptionFilter(logger));
+  app.useGlobalFilters(new AppExceptionFilter());
   await app.listen(3000);
 }
 bootstrap();
@@ -243,11 +269,9 @@ bootstrap();
 import { Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { AppExceptionFilter } from './app-exception.filter';
-import { LoggerService } from './logger.service';
 
 @Module({
   providers: [
-    LoggerService,
     {
       provide: APP_FILTER,
       useClass: AppExceptionFilter,

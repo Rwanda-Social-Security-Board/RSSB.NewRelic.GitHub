@@ -158,67 +158,183 @@ export class LoggerService {
 
 ## 5. NestJS Exception Filter
 
-Here is an example of an exception filter that uses the custom `LoggerService` and logs exceptions to New Relic:
+Below are two examples of exception filters that log exceptions to New Relic. Choose the one that fits your project:
+
+### Option A: Using NestJS's built-in `Logger`
 
 ```typescript
 import {
-  ExceptionFilter,
-  Catch,
   ArgumentsHost,
+  Catch,
+  ExceptionFilter,
   HttpException,
+  HttpStatus,
+  Logger,
 } from "@nestjs/common";
-import { LoggerService } from "./logger.service";
-import { Response, Request } from "express";
+import { Request, Response } from "express";
 
-const newrelic = require("newrelic");
+const newRelic = require("newrelic");
 
+/**
+ * Custom global exception filter that catches every thrown error.
+ */
 @Catch()
-export class AppExceptionFilter<T> implements ExceptionFilter {
-  constructor(private readonly logger: LoggerService) {}
+export class AppExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AppExceptionFilter.name);
 
-  async catch(exception: any, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const request = ctx.getRequest<Request>();
-    const response = ctx.getResponse<Response>();
+  catch(exception: unknown, host: ArgumentsHost): Response {
+    const context = host.switchToHttp();
+    const request = context.getRequest<Request>();
+    const response = context.getResponse<Response>();
+    const message =
+      exception instanceof HttpException
+        ? exception.getResponse()
+        : "Internal server error";
 
-    const isHttpException = exception instanceof HttpException;
-    const status = isHttpException ? exception.getStatus() : 500;
-    const message = isHttpException
-      ? exception.getResponse()
-      : "Internal server error";
-
-    this.logger.error(message, exception.stack);
+    this.logger.error(
+      message,
+      exception instanceof Error ? exception.stack : undefined
+    );
 
     // Log the error to New Relic with request/response context
-    newrelic.noticeError(
+    newRelic.noticeError(
       exception,
       {
         request,
         response,
       },
-      false,
+      false
     );
 
-    // Record a log event in New Relic
-    newrelic.recordLogEvent({
-      message: isHttpException ? exception.getResponse() : message,
-      level: "ERROR",
-      error: exception,
-    });
+    console.log(`❌ URL: ${request.url} ===> `, exception);
 
-    response.status(status).json({
-      statusCode: status,
-      message: message,
-    });
+    if (exception instanceof HttpException) {
+      const responseMsg = exception.getResponse();
+
+      if (responseMsg["message"] && Array.isArray(responseMsg["message"])) {
+        responseMsg["message"] = responseMsg["message"][0];
+      }
+
+      if (responseMsg["error"]) {
+        responseMsg["code"] = responseMsg["error"]
+          .split(" ")
+          ?.join("_")
+          ?.toUpperCase();
+        delete responseMsg["error"];
+      }
+      delete responseMsg["statusCode"];
+
+      // Record a log event in New Relic
+      newRelic.recordLogEvent({
+        message: exception.getResponse(),
+        level: "ERROR",
+        error: exception,
+        statusCode: exception.getStatus() || HttpStatus.INTERNAL_SERVER_ERROR,
+        timestamp: new Date().toISOString(),
+        path: request?.url,
+      });
+
+      return response.status(exception.getStatus()).json(responseMsg);
+    }
+
+    return response
+      .status(HttpStatus.INTERNAL_SERVER_ERROR)
+      .json({ message: "Internal server error" });
+  }
+}
+```
+
+### Option B: Using a custom `LoggerService`
+
+If you have a custom logging service (see section 4), you can inject it into the exception filter:
+
+```typescript
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  HttpStatus,
+} from "@nestjs/common";
+import { Request, Response } from "express";
+import { LoggerService } from "./logger.service";
+
+const newRelic = require("newrelic");
+
+/**
+ * Custom global exception filter that catches every thrown error.
+ */
+@Catch()
+export class AppExceptionFilter implements ExceptionFilter {
+  constructor(private readonly logger: LoggerService) {}
+
+  catch(exception: unknown, host: ArgumentsHost): Response {
+    const context = host.switchToHttp();
+    const request = context.getRequest<Request>();
+    const response = context.getResponse<Response>();
+    const message =
+      exception instanceof HttpException
+        ? exception.getResponse()
+        : "Internal server error";
+
+    this.logger.error(
+      message,
+      exception instanceof Error ? exception.stack : undefined
+    );
+
+    // Log the error to New Relic with request/response context
+    newRelic.noticeError(
+      exception,
+      {
+        request,
+        response,
+      },
+      false
+    );
+
+    console.log(`❌ URL: ${request.url} ===> `, exception);
+
+    if (exception instanceof HttpException) {
+      const responseMsg = exception.getResponse();
+
+      if (responseMsg["message"] && Array.isArray(responseMsg["message"])) {
+        responseMsg["message"] = responseMsg["message"][0];
+      }
+
+      if (responseMsg["error"]) {
+        responseMsg["code"] = responseMsg["error"]
+          .split(" ")
+          ?.join("_")
+          ?.toUpperCase();
+        delete responseMsg["error"];
+      }
+      delete responseMsg["statusCode"];
+
+      // Record a log event in New Relic
+      newRelic.recordLogEvent({
+        message: exception.getResponse(),
+        level: "ERROR",
+        error: exception,
+        statusCode: exception.getStatus() || HttpStatus.INTERNAL_SERVER_ERROR,
+        timestamp: new Date().toISOString(),
+        path: request?.url,
+      });
+
+      return response.status(exception.getStatus()).json(responseMsg);
+    }
+
+    return response
+      .status(HttpStatus.INTERNAL_SERVER_ERROR)
+      .json({ message: "Internal server error" });
   }
 }
 ```
 
 ### Registering the Exception Filter
 
-To activate the exception filter, you must register it globally. You can use either of the following options:
+To activate the exception filter, you must register it globally.
 
-**Option A: Register in `main.ts`**
+**For Option A (built-in Logger) - Register in `main.ts`:**
 
 ```typescript
 import 'newrelic';
@@ -226,18 +342,16 @@ import 'newrelic';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AppExceptionFilter } from './app-exception.filter';
-import { LoggerService } from './logger.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const logger = app.get(LoggerService);
-  app.useGlobalFilters(new AppExceptionFilter(logger));
+  app.useGlobalFilters(new AppExceptionFilter());
   await app.listen(3000);
 }
 bootstrap();
 ```
 
-**Option B: Register in `app.module.ts` (recommended for dependency injection)**
+**For Option B (custom LoggerService) - Register in `app.module.ts`:**
 
 ```typescript
 import { Module } from '@nestjs/common';
